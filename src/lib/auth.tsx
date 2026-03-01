@@ -35,13 +35,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  const withRetry = async <T,>(fn: () => Promise<T>, retries = 3): Promise<T> => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        if (err?.message === "Failed to fetch" && i < retries - 1) {
+          await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("Failed to connect. Please check your internet and try again.");
+  };
+
   const signUp = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signUp({ email, password });
+    const { error } = await withRetry(() => supabase.auth.signUp({ email, password }));
     if (error) throw error;
   };
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await withRetry(() => supabase.auth.signInWithPassword({ email, password }));
     if (error) throw error;
   };
 

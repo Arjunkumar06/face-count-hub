@@ -29,7 +29,10 @@ export default function Auth() {
       }
       navigate("/dashboard");
     } catch (err: any) {
-      toast.error(err.message || "Authentication failed");
+      const msg = err?.message === "Failed to fetch" 
+        ? "Connection issue — please wait a moment and try again." 
+        : (err?.message || "Authentication failed");
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
