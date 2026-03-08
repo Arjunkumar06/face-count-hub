@@ -6,136 +6,172 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+type AiCountResult = {
+  count: number;
+  confidence?: "high" | "medium" | "low";
+  details?: string;
+};
+
+function normalizeResult(result: Partial<AiCountResult>): AiCountResult {
+  const count = Number.isFinite(result.count) ? Math.max(0, Math.round(Number(result.count))) : 0;
+  const confidence = result.confidence === "high" || result.confidence === "medium" || result.confidence === "low"
+    ? result.confidence
+    : "low";
+  return {
+    count,
+    confidence,
+    details: typeof result.details === "string" ? result.details : "",
+  };
+}
+
+async function callVisionPass({
+  apiKey,
+  imageContent,
+  passInstruction,
+}: {
+  apiKey: string;
+  imageContent: any;
+  passInstruction: string;
+}): Promise<AiCountResult> {
+  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "google/gemini-2.5-pro",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are an expert crowd-counting model. Count humans in difficult scenes (occlusion, blur, profile view). Return only data for the provided tool call.",
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Count humans with this strategy: ${passInstruction}. Use facial features (eyes, mouth, nose, ears), hair/head, upper body, silhouettes, hands/arms, and clothing boundaries. Do not count mannequins/statues/posters.`,
+            },
+            imageContent,
+          ],
+        },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "return_count",
+            description: "Return human count result",
+            parameters: {
+              type: "object",
+              properties: {
+                count: { type: "number" },
+                confidence: { type: "string", enum: ["high", "medium", "low"] },
+                details: { type: "string" },
+              },
+              required: ["count", "confidence", "details"],
+              additionalProperties: false,
+            },
+          },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "return_count" } },
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`AI_PASS_ERROR:${response.status}:${text}`);
   }
+
+  const data = await response.json();
+  const args = data?.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+
+  if (!args) {
+    const fallbackContent = data?.choices?.[0]?.message?.content;
+    if (typeof fallbackContent === "string") {
+      try {
+        const jsonMatch = fallbackContent.match(/\{[\s\S]*\}/);
+        if (jsonMatch) return normalizeResult(JSON.parse(jsonMatch[0]));
+      } catch {
+        // ignore and throw below
+      }
+    }
+    throw new Error("Model did not return tool arguments");
+  }
+
+  return normalizeResult(JSON.parse(args));
+}
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
     const { imageBase64, imageUrl } = await req.json();
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
-    }
+    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
-    // Build the image content part
-    let imageContent: any;
-    if (imageBase64) {
-      imageContent = {
-        type: "image_url",
-        image_url: { url: imageBase64 },
-      };
-    } else if (imageUrl) {
-      imageContent = {
-        type: "image_url",
-        image_url: { url: imageUrl },
-      };
-    } else {
-      throw new Error("No image provided");
-    }
+    const imageContent = imageBase64
+      ? { type: "image_url", image_url: { url: imageBase64 } }
+      : imageUrl
+        ? { type: "image_url", image_url: { url: imageUrl } }
+        : null;
 
-    const systemPrompt = `You are an expert people-counting AI. Your job is to count the EXACT number of human beings visible in an image.
+    if (!imageContent) throw new Error("No image provided");
 
-DETECTION STRATEGY - Use ALL of these cues to identify people:
-1. **Faces** - Front-facing, side profile, or partially visible faces
-2. **Eyes** - Open or closed eyes
-3. **Mouth/Lips** - Visible mouths, smiles, teeth
-4. **Nose** - Visible noses from any angle
-5. **Ears** - Visible ears, even partially hidden by hair
-6. **Hair/Head** - Hair, bald heads, hats, head coverings, helmets
-7. **Body silhouettes** - Full or partial body outlines
-8. **Hands/Arms** - Visible limbs even if face is hidden
-9. **Clothing** - Distinct clothing indicating separate people
-10. **Shadows/Reflections** - People visible through shadows or reflections
+    // Ensemble algorithm: precision pass + recall pass, then weighted merge
+    const [precisionPass, recallPass] = await Promise.all([
+      callVisionPass({
+        apiKey: LOVABLE_API_KEY,
+        imageContent,
+        passInstruction:
+          "Precision pass: count only when you can identify distinct human identity boundaries to avoid double counting",
+      }),
+      callVisionPass({
+        apiKey: LOVABLE_API_KEY,
+        imageContent,
+        passInstruction:
+          "Recall pass: include partially visible humans via hair, ears, shoulders, body parts, and occluded profiles",
+      }),
+    ]);
 
-RULES:
-- Count EVERY person visible, even if partially occluded, blurry, far away, or facing away
-- If a face is not visible but you can see hair, an ear, a hand, or body, still count that as a person
-- People in the background count too
-- Do NOT count mannequins, statues, photos-within-photos, or drawings
-- If unsure whether something is a person, lean toward counting it
+    const rawScore = (precisionPass.count + recallPass.count * 2) / 3;
+    const count = Math.max(precisionPass.count, Math.round(rawScore));
+    const disagreement = Math.abs(precisionPass.count - recallPass.count);
 
-You MUST respond with ONLY a JSON object in this exact format:
-{"count": <number>, "confidence": "<high|medium|low>", "details": "<brief description of what you detected>"}`;
+    const confidence: "high" | "medium" | "low" =
+      disagreement <= 1 ? "high" : disagreement <= 3 ? "medium" : "low";
 
-    const response = await fetch(
-      "https://ai.gateway.lovable.dev/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
-          messages: [
-            { role: "system", content: systemPrompt },
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: "Count the exact number of people in this image. Use all visual cues: faces, eyes, mouths, noses, ears, hair, bodies, hands, clothing. If eyes are closed or not visible, use other features to detect people.",
-                },
-                imageContent,
-              ],
-            },
-          ],
-        }),
-      }
-    );
+    const details = `Ensemble result from precision(${precisionPass.count}) + recall(${recallPass.count}) passes. ${recallPass.details || precisionPass.details || ""}`.trim();
 
-    if (!response.ok) {
-      if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limit exceeded. Please try again in a moment." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "AI credits exhausted. Please add credits in Settings." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      const errorText = await response.text();
-      console.error("AI Gateway error:", response.status, errorText);
-      throw new Error(`AI Gateway error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || "";
-
-    // Parse the JSON response from the AI
-    let result;
-    try {
-      // Extract JSON from the response (handle markdown code blocks)
-      const jsonMatch = content.match(/\{[\s\S]*?\}/);
-      if (jsonMatch) {
-        result = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error("No JSON found in response");
-      }
-    } catch {
-      console.error("Failed to parse AI response:", content);
-      // Try to extract just a number
-      const numMatch = content.match(/\d+/);
-      result = {
-        count: numMatch ? parseInt(numMatch[0]) : 0,
-        confidence: "low",
-        details: content,
-      };
-    }
-
-    return new Response(JSON.stringify(result), {
+    return new Response(JSON.stringify({ count, confidence, details }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
+    const msg = e instanceof Error ? e.message : "Unknown error";
+
+    if (msg.startsWith("AI_PASS_ERROR:429:")) {
+      return new Response(
+        JSON.stringify({ error: "Rate limit exceeded. Please try again in a moment." }),
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (msg.startsWith("AI_PASS_ERROR:402:")) {
+      return new Response(
+        JSON.stringify({ error: "AI credits exhausted. Please add credits in Settings." }),
+        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     console.error("analyze-image error:", e);
-    return new Response(
-      JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: msg }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });
