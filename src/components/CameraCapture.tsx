@@ -9,15 +9,23 @@ interface CameraCaptureProps {
 export default function CameraCapture({ onCapture }: CameraCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [streaming, setStreaming] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
 
   const startCamera = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current?.play();
+        };
+        videoRef.current.onplaying = () => {
+          setVideoReady(true);
+        };
       }
       setStreaming(true);
     } catch {
@@ -28,14 +36,17 @@ export default function CameraCapture({ onCapture }: CameraCaptureProps) {
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     setStreaming(false);
+    setVideoReady(false);
   }, []);
 
   const capture = useCallback(() => {
-    if (!videoRef.current) return;
+    if (!videoRef.current || !videoReady) return;
+    const video = videoRef.current;
     const canvas = document.createElement("canvas");
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    canvas.getContext("2d")!.drawImage(videoRef.current, 0, 0);
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     canvas.toBlob((blob) => {
       if (blob) {
         const file = new File([blob], `capture-${Date.now()}.jpg`, { type: "image/jpeg" });
@@ -43,8 +54,8 @@ export default function CameraCapture({ onCapture }: CameraCaptureProps) {
         onCapture(file, url);
         stopCamera();
       }
-    }, "image/jpeg", 0.9);
-  }, [onCapture, stopCamera]);
+    }, "image/jpeg", 0.92);
+  }, [onCapture, stopCamera, videoReady]);
 
   if (!streaming) {
     return (
@@ -57,9 +68,11 @@ export default function CameraCapture({ onCapture }: CameraCaptureProps) {
 
   return (
     <div className="relative rounded-xl overflow-hidden shadow-card">
-      <video ref={videoRef} className="w-full max-h-64 object-cover" autoPlay muted />
+      <video ref={videoRef} className="w-full max-h-64 object-cover" autoPlay playsInline muted />
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-2">
-        <Button onClick={capture} size="sm">Capture</Button>
+        <Button onClick={capture} size="sm" disabled={!videoReady}>
+          {videoReady ? "Capture" : "Loading..."}
+        </Button>
         <Button onClick={stopCamera} size="sm" variant="outline">
           <X className="h-4 w-4" />
         </Button>
