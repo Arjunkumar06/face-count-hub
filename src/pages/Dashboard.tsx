@@ -61,12 +61,7 @@ export default function Dashboard() {
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
           <h1 className="text-3xl font-display font-bold text-foreground mb-2">New Scan</h1>
           <p className="text-muted-foreground mb-8">
-            Upload images or use your camera to count people.
-            {!modelsReady && (
-              <span className="inline-flex items-center gap-1 ml-2 text-primary text-sm">
-                <Loader2 className="h-3 w-3 animate-spin" /> Loading AI model...
-              </span>
-            )}
+            Upload images or use your camera to count people with AI vision.
           </p>
 
           {/* Controls */}
