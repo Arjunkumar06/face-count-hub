@@ -1,11 +1,10 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import { loadModels } from "@/lib/face-detection";
 import { Button } from "@/components/ui/button";
 import ScanCard from "@/components/ScanCard";
 import CameraCapture from "@/components/CameraCapture";
-import { ScanLine, Upload, History, LogOut, Loader2 } from "lucide-react";
+import { ScanLine, Upload, History, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
 
@@ -17,11 +16,6 @@ interface ImageItem {
 export default function Dashboard() {
   const { user, signOut } = useAuth();
   const [images, setImages] = useState<ImageItem[]>([]);
-  const [modelsReady, setModelsReady] = useState(false);
-
-  useEffect(() => {
-    loadModels().then(() => setModelsReady(true));
-  }, []);
 
   const handleUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
