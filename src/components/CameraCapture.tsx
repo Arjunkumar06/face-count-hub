@@ -6,11 +6,11 @@ interface CameraCaptureProps {
   onCapture: (file: File, url: string) => void;
 }
 
-const cameraPreferenceChain: MediaTrackConstraints[] = [
+const cameraPreferenceChain: Array<boolean | MediaTrackConstraints> = [
   { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
   { facingMode: { ideal: "user" }, width: { ideal: 1280 }, height: { ideal: 720 } },
   { width: { ideal: 1280 }, height: { ideal: 720 } },
-  true as unknown as MediaTrackConstraints,
+  true,
 ];
 
 export default function CameraCapture({ onCapture }: CameraCaptureProps) {
