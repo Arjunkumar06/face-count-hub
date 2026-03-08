@@ -1,32 +1,102 @@
-import * as faceapi from "face-api.js";
+import { supabase } from "@/integrations/supabase/client";
 
-let modelsLoaded = false;
-
-export async function loadModels() {
-  if (modelsLoaded) return;
-  const MODEL_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.14/model/";
-  await Promise.all([
-    faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
-    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-  ]);
-  modelsLoaded = true;
+/**
+ * Convert an image element to a base64 data URL by drawing it on a canvas.
+ */
+function imageToBase64(img: HTMLImageElement): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = img.naturalWidth || img.width;
+  canvas.height = img.naturalHeight || img.height;
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.85);
 }
 
+/**
+ * Convert a File to a base64 data URL.
+ */
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// No model loading needed anymore
+export async function loadModels() {
+  // AI vision is used instead of local models - no loading needed
+  return;
+}
+
+export interface DetectionResult {
+  count: number;
+  confidence: string;
+  details: string;
+}
+
+/**
+ * Detect people in an image using AI vision analysis.
+ * Analyzes faces, eyes, mouth, ears, hair, nose, teeth, body etc.
+ */
 export async function detectFaces(imageElement: HTMLImageElement): Promise<number> {
-  await loadModels();
-  
-  // Use SSD MobileNet (more accurate) as primary detector
-  const ssdDetections = await faceapi.detectAllFaces(
-    imageElement,
-    new faceapi.SsdMobilenetv1Options({ minConfidence: 0.3 })
-  );
+  const result = await detectFacesDetailed(imageElement);
+  return result.count;
+}
 
-  // Also run TinyFaceDetector to catch faces SSD might miss
-  const tinyDetections = await faceapi.detectAllFaces(
-    imageElement,
-    new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.3 })
-  );
+export async function detectFacesDetailed(imageElement: HTMLImageElement): Promise<DetectionResult> {
+  try {
+    const base64 = imageToBase64(imageElement);
 
-  // Return the higher count from both detectors
-  return Math.max(ssdDetections.length, tinyDetections.length);
+    const { data, error } = await supabase.functions.invoke("analyze-image", {
+      body: { imageBase64: base64 },
+    });
+
+    if (error) {
+      console.error("AI detection error:", error);
+      throw new Error(error.message || "Detection failed");
+    }
+
+    if (data.error) {
+      throw new Error(data.error);
+    }
+
+    return {
+      count: data.count ?? 0,
+      confidence: data.confidence ?? "unknown",
+      details: data.details ?? "",
+    };
+  } catch (err) {
+    console.error("detectFaces error:", err);
+    throw err;
+  }
+}
+
+export async function detectFacesFromFile(file: File): Promise<DetectionResult> {
+  try {
+    const base64 = await fileToBase64(file);
+
+    const { data, error } = await supabase.functions.invoke("analyze-image", {
+      body: { imageBase64: base64 },
+    });
+
+    if (error) {
+      console.error("AI detection error:", error);
+      throw new Error(error.message || "Detection failed");
+    }
+
+    if (data.error) {
+      throw new Error(data.error);
+    }
+
+    return {
+      count: data.count ?? 0,
+      confidence: data.confidence ?? "unknown",
+      details: data.details ?? "",
+    };
+  } catch (err) {
+    console.error("detectFacesFromFile error:", err);
+    throw err;
+  }
 }

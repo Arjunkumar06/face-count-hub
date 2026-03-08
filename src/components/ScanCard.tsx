@@ -1,9 +1,9 @@
 import { useState, useRef } from "react";
-import { detectFaces } from "@/lib/face-detection";
+import { detectFacesDetailed, type DetectionResult } from "@/lib/face-detection";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { Loader2, Users } from "lucide-react";
+import { Loader2, Users, Eye, Info } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
 
@@ -14,7 +14,7 @@ interface ScanCardProps {
 }
 
 export default function ScanCard({ imageUrl, file, onSaved }: ScanCardProps) {
-  const [count, setCount] = useState<number | null>(null);
+  const [result, setResult] = useState<DetectionResult | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [saved, setSaved] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -30,8 +30,8 @@ export default function ScanCard({ imageUrl, file, onSaved }: ScanCardProps) {
           imgRef.current!.onload = () => resolve();
         });
       }
-      const faces = await detectFaces(imgRef.current);
-      setCount(faces);
+      const detection = await detectFacesDetailed(imgRef.current);
+      setResult(detection);
 
       // Upload image and save scan
       if (user && file) {
@@ -53,7 +53,7 @@ export default function ScanCard({ imageUrl, file, onSaved }: ScanCardProps) {
         const { error: insertError } = await supabase.from("scans").insert({
           user_id: user.id,
           image_url: urlData.publicUrl,
-          headcount: faces,
+          headcount: detection.count,
         });
 
         if (insertError) {
@@ -62,12 +62,12 @@ export default function ScanCard({ imageUrl, file, onSaved }: ScanCardProps) {
         } else {
           setSaved(true);
           onSaved?.();
-          toast.success(`Detected ${faces} ${faces === 1 ? "person" : "people"}!`);
+          toast.success(`Detected ${detection.count} ${detection.count === 1 ? "person" : "people"}!`);
         }
       }
     } catch (err) {
       console.error(err);
-      toast.error("Detection failed");
+      toast.error("Detection failed. Please try again.");
     } finally {
       setAnalyzing(false);
     }
@@ -87,21 +87,36 @@ export default function ScanCard({ imageUrl, file, onSaved }: ScanCardProps) {
         className="w-full h-48 object-cover"
       />
       <div className="p-4">
-        {count !== null ? (
-          <div className="flex items-center gap-2 text-primary font-semibold text-lg">
-            <Users className="h-5 w-5" />
-            {count} {count === 1 ? "person" : "people"} detected
-            {saved && <span className="text-xs text-muted-foreground ml-auto">Saved ✓</span>}
+        {result !== null ? (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-primary font-semibold text-lg">
+              <Users className="h-5 w-5" />
+              {result.count} {result.count === 1 ? "person" : "people"} detected
+              {saved && <span className="text-xs text-muted-foreground ml-auto">Saved ✓</span>}
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Eye className="h-3 w-3" />
+              Confidence: <span className="font-medium capitalize">{result.confidence}</span>
+            </div>
+            {result.details && (
+              <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                <Info className="h-3 w-3 mt-0.5 shrink-0" />
+                <span>{result.details}</span>
+              </div>
+            )}
           </div>
         ) : (
           <Button onClick={handleAnalyze} disabled={analyzing} className="w-full shadow-warm">
             {analyzing ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Analyzing...
+                AI Analyzing...
               </>
             ) : (
-              "Analyze"
+              <>
+                <Eye className="h-4 w-4 mr-2" />
+                Analyze with AI
+              </>
             )}
           </Button>
         )}
