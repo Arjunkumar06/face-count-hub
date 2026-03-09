@@ -135,25 +135,24 @@ export default function CameraCapture({ onCapture }: CameraCaptureProps) {
     );
   }, [onCapture, stopCamera, videoReady]);
 
-  if (!streaming) {
-    return (
-      <Button variant="outline" onClick={startCamera} className="gap-2">
-        <Camera className="h-4 w-4" />
-        Use Camera
-      </Button>
-    );
-  }
-
   return (
-    <div className="relative rounded-xl overflow-hidden shadow-card">
-      <video ref={videoRef} className="w-full max-h-64 object-cover" autoPlay playsInline muted />
-      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-2">
-        <Button onClick={capture} size="sm" disabled={!videoReady}>
-          {videoReady ? "Capture" : "Loading..."}
+    <div>
+      {!streaming && (
+        <Button variant="outline" onClick={startCamera} className="gap-2">
+          <Camera className="h-4 w-4" />
+          Use Camera
         </Button>
-        <Button onClick={stopCamera} size="sm" variant="outline">
-          <X className="h-4 w-4" />
-        </Button>
+      )}
+      <div className={`relative rounded-xl overflow-hidden shadow-card ${!streaming ? 'hidden' : ''}`}>
+        <video ref={videoRef} className="w-full max-h-64 object-cover" autoPlay playsInline muted />
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-2">
+          <Button onClick={capture} size="sm" disabled={!videoReady}>
+            {videoReady ? "Capture" : "Loading..."}
+          </Button>
+          <Button onClick={stopCamera} size="sm" variant="outline">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </div>
   );
