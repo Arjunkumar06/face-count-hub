@@ -27,6 +27,30 @@ function normalizeResult(result: Partial<AiCountResult>): AiCountResult {
   };
 }
 
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callVisionPassWithRetry(args: {
+  apiKey: string;
+  imageContent: any;
+  passInstruction: string;
+}, retries = 3): Promise<AiCountResult> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await callVisionPass(args);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      if (msg.startsWith("AI_PASS_ERROR:429:") && attempt < retries - 1) {
+        await sleep(2000 * (attempt + 1));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error("Max retries exceeded");
+}
+
 async function callVisionPass({
   apiKey,
   imageContent,
@@ -180,21 +204,20 @@ serve(async (req) => {
       });
     }
 
-    // Ensemble algorithm: precision pass + recall pass, then weighted merge
-    const [precisionPass, recallPass] = await Promise.all([
-      callVisionPass({
-        apiKey: LOVABLE_API_KEY,
-        imageContent,
-        passInstruction:
-          "Precision pass: count only when you can identify distinct human identity boundaries to avoid double counting",
-      }),
-      callVisionPass({
-        apiKey: LOVABLE_API_KEY,
-        imageContent,
-        passInstruction:
-          "Recall pass: include partially visible humans via hair, ears, shoulders, body parts, and occluded profiles",
-      }),
-    ]);
+    // Sequential calls with retry to avoid rate limiting
+    const precisionPass = await callVisionPassWithRetry({
+      apiKey: LOVABLE_API_KEY,
+      imageContent,
+      passInstruction:
+        "Precision pass: count only when you can identify distinct human identity boundaries to avoid double counting",
+    });
+
+    const recallPass = await callVisionPassWithRetry({
+      apiKey: LOVABLE_API_KEY,
+      imageContent,
+      passInstruction:
+        "Recall pass: include partially visible humans via hair, ears, shoulders, body parts, and occluded profiles",
+    });
 
     const rawScore = (precisionPass.count + recallPass.count * 2) / 3;
     const count = Math.max(precisionPass.count, Math.round(rawScore));
