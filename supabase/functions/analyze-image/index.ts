@@ -1,10 +1,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
+
+const MAX_BODY_BYTES = 5 * 1024 * 1024; // 5 MB
 
 type AiCountResult = {
   count: number;
@@ -110,18 +113,72 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { imageBase64, imageUrl } = await req.json();
+    // --- Authentication check ---
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } }
+    );
+
+    const token = authHeader.replace("Bearer ", "");
+    const { data: claimsData, error: claimsError } = await supabase.auth.getClaims(token);
+    if (claimsError || !claimsData?.claims) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // --- Input validation: body size limit ---
+    const bodyText = await req.text();
+    if (bodyText.length > MAX_BODY_BYTES) {
+      return new Response(JSON.stringify({ error: "Payload too large. Maximum 5MB allowed." }), {
+        status: 413,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { imageBase64, imageUrl } = JSON.parse(bodyText);
+
+    // --- Input validation: imageBase64 format ---
+    if (imageBase64 && typeof imageBase64 === "string") {
+      if (!imageBase64.startsWith("data:image/")) {
+        return new Response(JSON.stringify({ error: "Invalid image format" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // --- Input validation: reject arbitrary imageUrl (SSRF prevention) ---
+    if (imageUrl) {
+      return new Response(JSON.stringify({ error: "imageUrl is not supported. Please send imageBase64." }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
     const imageContent = imageBase64
       ? { type: "image_url", image_url: { url: imageBase64 } }
-      : imageUrl
-        ? { type: "image_url", image_url: { url: imageUrl } }
-        : null;
+      : null;
 
-    if (!imageContent) throw new Error("No image provided");
+    if (!imageContent) {
+      return new Response(JSON.stringify({ error: "No image provided" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     // Ensemble algorithm: precision pass + recall pass, then weighted merge
     const [precisionPass, recallPass] = await Promise.all([
@@ -169,9 +226,9 @@ serve(async (req) => {
     }
 
     console.error("analyze-image error:", e);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ error: "An unexpected error occurred. Please try again." }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
   }
 });
