@@ -83,7 +83,7 @@ export async function detectFacesFromFile(file: File): Promise<DetectionResult> 
 
     if (error) {
       console.error("AI detection error:", error);
-      throw new Error(error.message || "Detection failed");
+      throw new Error("Detection failed. Please try again.");
     }
 
     if (data.error) {
