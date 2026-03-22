@@ -46,13 +46,19 @@ export default function ScanCard({ imageUrl, file, onSaved }: ScanCardProps) {
           return;
         }
 
-        const { data: urlData } = supabase.storage
+        const { data: signedUrlData, error: signedUrlError } = await supabase.storage
           .from("scan-images")
-          .getPublicUrl(filePath);
+          .createSignedUrl(filePath, 3600);
+
+        if (signedUrlError || !signedUrlData?.signedUrl) {
+          console.error("Signed URL error:", signedUrlError);
+          toast.error("Failed to generate image URL");
+          return;
+        }
 
         const { error: insertError } = await supabase.from("scans").insert({
           user_id: user.id,
-          image_url: urlData.publicUrl,
+          image_url: signedUrlData.signedUrl,
           headcount: detection.count,
         });
 
