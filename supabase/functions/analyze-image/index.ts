@@ -204,21 +204,20 @@ serve(async (req) => {
       });
     }
 
-    // Ensemble algorithm: precision pass + recall pass, then weighted merge
-    const [precisionPass, recallPass] = await Promise.all([
-      callVisionPass({
-        apiKey: LOVABLE_API_KEY,
-        imageContent,
-        passInstruction:
-          "Precision pass: count only when you can identify distinct human identity boundaries to avoid double counting",
-      }),
-      callVisionPass({
-        apiKey: LOVABLE_API_KEY,
-        imageContent,
-        passInstruction:
-          "Recall pass: include partially visible humans via hair, ears, shoulders, body parts, and occluded profiles",
-      }),
-    ]);
+    // Sequential calls with retry to avoid rate limiting
+    const precisionPass = await callVisionPassWithRetry({
+      apiKey: LOVABLE_API_KEY,
+      imageContent,
+      passInstruction:
+        "Precision pass: count only when you can identify distinct human identity boundaries to avoid double counting",
+    });
+
+    const recallPass = await callVisionPassWithRetry({
+      apiKey: LOVABLE_API_KEY,
+      imageContent,
+      passInstruction:
+        "Recall pass: include partially visible humans via hair, ears, shoulders, body parts, and occluded profiles",
+    });
 
     const rawScore = (precisionPass.count + recallPass.count * 2) / 3;
     const count = Math.max(precisionPass.count, Math.round(rawScore));
