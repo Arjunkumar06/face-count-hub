@@ -27,6 +27,30 @@ function normalizeResult(result: Partial<AiCountResult>): AiCountResult {
   };
 }
 
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callVisionPassWithRetry(args: {
+  apiKey: string;
+  imageContent: any;
+  passInstruction: string;
+}, retries = 3): Promise<AiCountResult> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await callVisionPass(args);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      if (msg.startsWith("AI_PASS_ERROR:429:") && attempt < retries - 1) {
+        await sleep(2000 * (attempt + 1));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error("Max retries exceeded");
+}
+
 async function callVisionPass({
   apiKey,
   imageContent,
