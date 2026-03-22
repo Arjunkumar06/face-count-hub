@@ -35,14 +35,14 @@ async function callVisionPassWithRetry(args: {
   apiKey: string;
   imageContent: any;
   passInstruction: string;
-}, retries = 3): Promise<AiCountResult> {
+}, retries = 4): Promise<AiCountResult> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       return await callVisionPass(args);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       if (msg.startsWith("AI_PASS_ERROR:429:") && attempt < retries - 1) {
-        await sleep(2000 * (attempt + 1));
+        await sleep(5000 * (attempt + 1)); // 5s, 10s, 15s backoff
         continue;
       }
       throw e;
