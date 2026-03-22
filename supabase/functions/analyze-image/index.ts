@@ -8,6 +8,10 @@ const corsHeaders = {
 };
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024; // 5 MB
+const RESULT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const RESULT_CACHE_MAX_ITEMS = 200;
+
+const resultCache = new Map<string, { expiresAt: number; result: AiCountResult }>();
 
 type AiCountResult = {
   count: number;
@@ -31,18 +35,55 @@ async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function hashImageBase64(imageBase64: string): Promise<string> {
+  const bytes = new TextEncoder().encode(imageBase64);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function getCachedResult(key: string): AiCountResult | null {
+  const cached = resultCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    resultCache.delete(key);
+    return null;
+  }
+  return cached.result;
+}
+
+function setCachedResult(key: string, result: AiCountResult) {
+  if (resultCache.size >= RESULT_CACHE_MAX_ITEMS) {
+    const oldestKey = resultCache.keys().next().value;
+    if (oldestKey) resultCache.delete(oldestKey);
+  }
+
+  resultCache.set(key, {
+    expiresAt: Date.now() + RESULT_CACHE_TTL_MS,
+    result,
+  });
+}
+
 async function callVisionPassWithRetry(args: {
   apiKey: string;
   imageContent: any;
   passInstruction: string;
-}, retries = 4): Promise<AiCountResult> {
+}, retries = 3): Promise<AiCountResult> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       return await callVisionPass(args);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       if (msg.startsWith("AI_PASS_ERROR:429:") && attempt < retries - 1) {
-        await sleep(5000 * (attempt + 1)); // 5s, 10s, 15s backoff
+        const retryAfterMatch = msg.match(/^AI_PASS_ERROR:429:([^:]*):/);
+        const retryAfterSeconds = Number(retryAfterMatch?.[1]);
+        const fallbackDelayMs = 8000 * (attempt + 1);
+        const retryAfterMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+          ? retryAfterSeconds * 1000
+          : fallbackDelayMs;
+
+        await sleep(retryAfterMs);
         continue;
       }
       throw e;
@@ -111,7 +152,8 @@ async function callVisionPass({
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`AI_PASS_ERROR:${response.status}:${text}`);
+    const retryAfter = response.headers.get("retry-after") ?? "";
+    throw new Error(`AI_PASS_ERROR:${response.status}:${retryAfter}:${text}`);
   }
 
   const data = await response.json();
@@ -204,31 +246,31 @@ serve(async (req) => {
       });
     }
 
-    // Sequential calls with retry to avoid rate limiting
-    const precisionPass = await callVisionPassWithRetry({
+    const imageHash = await hashImageBase64(imageBase64);
+    const cachedResult = getCachedResult(imageHash);
+    if (cachedResult) {
+      return new Response(JSON.stringify(cachedResult), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Single balanced pass to reduce rate-limit pressure
+    const balancedPass = await callVisionPassWithRetry({
       apiKey: LOVABLE_API_KEY,
       imageContent,
       passInstruction:
-        "Precision pass: count only when you can identify distinct human identity boundaries to avoid double counting",
+        "Balanced pass: count all distinct humans once, including partially visible people when strong human cues are present, while avoiding double-counting in dense scenes",
     });
 
-    const recallPass = await callVisionPassWithRetry({
-      apiKey: LOVABLE_API_KEY,
-      imageContent,
-      passInstruction:
-        "Recall pass: include partially visible humans via hair, ears, shoulders, body parts, and occluded profiles",
+    const result = normalizeResult({
+      count: balancedPass.count,
+      confidence: balancedPass.confidence,
+      details: `Single-pass result. ${balancedPass.details || ""}`.trim(),
     });
 
-    const rawScore = (precisionPass.count + recallPass.count * 2) / 3;
-    const count = Math.max(precisionPass.count, Math.round(rawScore));
-    const disagreement = Math.abs(precisionPass.count - recallPass.count);
+    setCachedResult(imageHash, result);
 
-    const confidence: "high" | "medium" | "low" =
-      disagreement <= 1 ? "high" : disagreement <= 3 ? "medium" : "low";
-
-    const details = `Ensemble result from precision(${precisionPass.count}) + recall(${recallPass.count}) passes. ${recallPass.details || precisionPass.details || ""}`.trim();
-
-    return new Response(JSON.stringify({ count, confidence, details }), {
+    return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

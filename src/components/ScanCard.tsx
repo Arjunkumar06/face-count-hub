@@ -73,7 +73,12 @@ export default function ScanCard({ imageUrl, file, onSaved }: ScanCardProps) {
       }
     } catch (err) {
       console.error(err);
-      toast.error("Detection failed. Please try again.");
+      const message = err instanceof Error ? err.message : "";
+      if (message === "RATE_LIMITED") {
+        toast.error("Too many scans in a short time. Please wait a few seconds and try again.");
+      } else {
+        toast.error("Detection failed. Please try again.");
+      }
     } finally {
       setAnalyzing(false);
     }
