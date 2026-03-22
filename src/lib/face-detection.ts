@@ -1,5 +1,75 @@
 import { supabase } from "@/integrations/supabase/client";
 
+const CLIENT_SCAN_GAP_MS = 7000;
+let scanQueue: Promise<void> = Promise.resolve();
+let lastScanStartedAt = 0;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseInvokeStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return undefined;
+
+  const context = (error as { context?: { status?: number } }).context;
+  if (typeof context?.status === "number") return context.status;
+
+  const message = (error as { message?: string }).message;
+  if (typeof message === "string") {
+    const match = message.match(/\b(4\d\d|5\d\d)\b/);
+    if (match) return Number(match[1]);
+  }
+
+  return undefined;
+}
+
+async function enqueueDetection<T>(work: () => Promise<T>): Promise<T> {
+  const run = scanQueue.then(async () => {
+    const now = Date.now();
+    const waitMs = Math.max(0, CLIENT_SCAN_GAP_MS - (now - lastScanStartedAt));
+    if (waitMs > 0) await sleep(waitMs);
+
+    lastScanStartedAt = Date.now();
+    return work();
+  });
+
+  scanQueue = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+function normalizeDetectionPayload(data: any): DetectionResult {
+  return {
+    count: data?.count ?? 0,
+    confidence: data?.confidence ?? "unknown",
+    details: data?.details ?? "",
+  };
+}
+
+async function invokeAnalyzeImage(base64: string): Promise<DetectionResult> {
+  const { data, error } = await supabase.functions.invoke("analyze-image", {
+    body: { imageBase64: base64 },
+  });
+
+  if (error) {
+    console.error("AI detection error:", error);
+    const status = parseInvokeStatus(error);
+    if (status === 429) {
+      throw new Error("RATE_LIMITED");
+    }
+    throw new Error("Detection failed. Please try again.");
+  }
+
+  if (data?.error) {
+    const errorText = typeof data.error === "string" ? data.error : "Detection failed. Please try again.";
+    if (errorText.toLowerCase().includes("rate limit")) {
+      throw new Error("RATE_LIMITED");
+    }
+    throw new Error(errorText);
+  }
+
+  return normalizeDetectionPayload(data);
+}
+
 /**
  * Convert an image element to a base64 data URL by drawing it on a canvas.
  */
@@ -48,25 +118,7 @@ export async function detectFaces(imageElement: HTMLImageElement): Promise<numbe
 export async function detectFacesDetailed(imageElement: HTMLImageElement): Promise<DetectionResult> {
   try {
     const base64 = imageToBase64(imageElement);
-
-    const { data, error } = await supabase.functions.invoke("analyze-image", {
-      body: { imageBase64: base64 },
-    });
-
-    if (error) {
-      console.error("AI detection error:", error);
-      throw new Error("Detection failed. Please try again.");
-    }
-
-    if (data.error) {
-      throw new Error(data.error);
-    }
-
-    return {
-      count: data.count ?? 0,
-      confidence: data.confidence ?? "unknown",
-      details: data.details ?? "",
-    };
+    return await enqueueDetection(() => invokeAnalyzeImage(base64));
   } catch (err) {
     console.error("detectFaces error:", err);
     throw err;
@@ -76,25 +128,7 @@ export async function detectFacesDetailed(imageElement: HTMLImageElement): Promi
 export async function detectFacesFromFile(file: File): Promise<DetectionResult> {
   try {
     const base64 = await fileToBase64(file);
-
-    const { data, error } = await supabase.functions.invoke("analyze-image", {
-      body: { imageBase64: base64 },
-    });
-
-    if (error) {
-      console.error("AI detection error:", error);
-      throw new Error("Detection failed. Please try again.");
-    }
-
-    if (data.error) {
-      throw new Error(data.error);
-    }
-
-    return {
-      count: data.count ?? 0,
-      confidence: data.confidence ?? "unknown",
-      details: data.details ?? "",
-    };
+    return await enqueueDetection(() => invokeAnalyzeImage(base64));
   } catch (err) {
     console.error("detectFacesFromFile error:", err);
     throw err;
