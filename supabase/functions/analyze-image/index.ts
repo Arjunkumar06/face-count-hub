@@ -108,7 +108,7 @@ async function callVisionPass({
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
+      model: "google/gemini-2.5-pro",
       temperature: 0,
       messages: [
         {
@@ -264,18 +264,31 @@ serve(async (req) => {
       });
     }
 
-    // Single balanced pass to reduce rate-limit pressure
-    const balancedPass = await callVisionPassWithRetry({
-      apiKey: LOVABLE_API_KEY,
-      imageContent,
-      passInstruction:
-        "Thorough enumeration pass: systematically scan the entire image left-to-right, top-to-bottom. Number each person you find (Person 1, Person 2, etc.) and note their position. Count ALL humans including those at edges, partially cropped, partially hidden behind others, in the background, or only showing the top of their head. Even a sliver of a face, a partial head, or just hair visible behind someone counts as a person. ERR ON THE SIDE OF COUNTING MORE rather than fewer — it is better to slightly overcount than to miss someone. After your initial scan, do a SECOND mental pass specifically looking for anyone you might have missed between or behind already-counted people",
-    });
+    // Dual-pass strategy for accuracy
+    const [pass1, pass2] = await Promise.all([
+      callVisionPassWithRetry({
+        apiKey: LOVABLE_API_KEY,
+        imageContent,
+        passInstruction:
+          "GRID-BASED ENUMERATION: Mentally divide the image into a 3x3 grid. For EACH of the 9 cells, list every person or partial person visible. Label them by grid cell (e.g., 'Top-Left: Person 1, Person 2'). Include anyone whose head, hair, shoulder, arm, or any body part appears in that cell. After scanning all 9 cells, give the TOTAL. Count partial/occluded people. Err on the side of MORE.",
+      }),
+      callVisionPassWithRetry({
+        apiKey: LOVABLE_API_KEY,
+        imageContent,
+        passInstruction:
+          "FEATURE-BASED ENUMERATION: First, count all clearly visible full faces. Second, count all partially visible faces (profile, back of head, occluded). Third, count any humans visible only by body parts (shoulder, arm, hair top) without a face. For each category give the sub-count, then sum ALL categories for the total. Every distinct human presence counts, even if only hair or a shoulder is visible.",
+      }),
+    ]);
+
+    // Take the higher count — undercounting is the main problem
+    const finalCount = Math.max(pass1.count, pass2.count);
+    const finalConfidence = pass1.count === pass2.count ? "high" : 
+      Math.abs(pass1.count - pass2.count) <= 1 ? "medium" : "low";
 
     const result = normalizeResult({
-      count: balancedPass.count,
-      confidence: balancedPass.confidence,
-      details: `Single-pass result. ${balancedPass.details || ""}`.trim(),
+      count: finalCount,
+      confidence: finalConfidence,
+      details: `Dual-pass: Grid=${pass1.count}, Feature=${pass2.count}. ${pass1.details || ""} ${pass2.details || ""}`.trim(),
     });
 
     setCachedResult(imageHash, result);
