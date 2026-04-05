@@ -107,6 +107,7 @@ export default function Dashboard() {
           )}
         </motion.div>
       </main>
+      <ChatBot />
     </div>
   );
 }
