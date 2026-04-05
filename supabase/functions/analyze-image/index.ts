@@ -264,31 +264,44 @@ serve(async (req) => {
       });
     }
 
-    // Dual-pass strategy for accuracy
-    const [pass1, pass2] = await Promise.all([
+    // Triple-pass strategy for accuracy
+    const [pass1, pass2, pass3] = await Promise.all([
       callVisionPassWithRetry({
         apiKey: LOVABLE_API_KEY,
         imageContent,
         passInstruction:
-          "GRID-BASED ENUMERATION: Mentally divide the image into a 3x3 grid. For EACH of the 9 cells, list every person or partial person visible. Label them by grid cell (e.g., 'Top-Left: Person 1, Person 2'). Include anyone whose head, hair, shoulder, arm, or any body part appears in that cell. After scanning all 9 cells, give the TOTAL. Count partial/occluded people. Err on the side of MORE.",
+          "GRID-BASED ENUMERATION: Mentally divide the image into a 4x4 grid (16 cells). For EACH cell, list every person or partial person visible. Label them by grid cell (e.g., 'Row1-Col1: Person 1'). Include anyone whose head, hair, shoulder, arm, or any body part appears in that cell. After scanning all 16 cells, deduplicate people spanning multiple cells, then give the TOTAL. Count partial/occluded people. Err on the side of MORE.",
       }),
       callVisionPassWithRetry({
         apiKey: LOVABLE_API_KEY,
         imageContent,
         passInstruction:
-          "FEATURE-BASED ENUMERATION: First, count all clearly visible full faces. Second, count all partially visible faces (profile, back of head, occluded). Third, count any humans visible only by body parts (shoulder, arm, hair top) without a face. For each category give the sub-count, then sum ALL categories for the total. Every distinct human presence counts, even if only hair or a shoulder is visible.",
+          "FEATURE-BASED ENUMERATION: First, count all clearly visible full faces. Second, count all partially visible faces (profile, three-quarter view, back of head, occluded by objects or other people). Third, count any humans visible only by body parts (shoulder, arm, hair top, legs) without any face visible. For each category give the sub-count, then sum ALL categories for the total. Every distinct human presence counts, even if only hair or a shoulder is visible.",
+      }),
+      callVisionPassWithRetry({
+        apiKey: LOVABLE_API_KEY,
+        imageContent,
+        passInstruction:
+          "SYSTEMATIC LEFT-TO-RIGHT SWEEP: Scan the entire image from left edge to right edge, top to bottom, like reading a page. Number each person you find (Person 1, Person 2, etc.) and note their approximate position (e.g., 'far left background', 'center foreground'). Count ALL humans including those at edges, partially cropped, partially hidden behind others or objects, in the background, blurry, or only showing the top of their head. Even a sliver of a face, a partial head, or just hair visible behind someone counts as a person. ERR ON THE SIDE OF COUNTING MORE rather than fewer.",
       }),
     ]);
 
-    // Take the higher count — undercounting is the main problem
-    const finalCount = Math.max(pass1.count, pass2.count);
-    const finalConfidence = pass1.count === pass2.count ? "high" : 
-      Math.abs(pass1.count - pass2.count) <= 1 ? "medium" : "low";
+    // Use median of 3 passes for robustness, but if 2+ agree take that value
+    const counts = [pass1.count, pass2.count, pass3.count].sort((a, b) => a - b);
+    const median = counts[1];
+    const maxCount = counts[2];
+    
+    // If the max is only 1 more than median, trust the max (undercounting bias)
+    const finalCount = (maxCount - median <= 1) ? maxCount : median;
+    
+    const allSame = counts[0] === counts[2];
+    const twoAgree = counts[0] === counts[1] || counts[1] === counts[2];
+    const finalConfidence = allSame ? "high" : twoAgree ? "medium" : "low";
 
     const result = normalizeResult({
       count: finalCount,
       confidence: finalConfidence,
-      details: `Dual-pass: Grid=${pass1.count}, Feature=${pass2.count}. ${pass1.details || ""} ${pass2.details || ""}`.trim(),
+      details: `Triple-pass: Grid=${pass1.count}, Feature=${pass2.count}, Sweep=${pass3.count}. ${pass1.details || ""} ${pass2.details || ""} ${pass3.details || ""}`.trim(),
     });
 
     setCachedResult(imageHash, result);
