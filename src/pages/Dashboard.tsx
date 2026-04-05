@@ -7,6 +7,7 @@ import CameraCapture from "@/components/CameraCapture";
 import { ScanLine, Upload, History, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
+import ChatBot from "@/components/ChatBot";
 
 interface ImageItem {
   url: string;
@@ -106,6 +107,7 @@ export default function Dashboard() {
           )}
         </motion.div>
       </main>
+      <ChatBot />
     </div>
   );
 }
