@@ -114,14 +114,24 @@ async function callVisionPass({
         {
           role: "system",
           content:
-            "You are an expert crowd-counting model. Count humans in difficult scenes (occlusion, blur, profile view). Return only data for the provided tool call.",
+            "You are an expert crowd-counting and human-detection model specializing in pixel-level analysis. You excel at counting humans in difficult scenes including occlusion, blur, low light, profile views, and rear views. You analyze images at the pixel level to detect subtle human presence cues. Return only data for the provided tool call.",
         },
         {
           role: "user",
           content: [
             {
               type: "text",
-              text: `Count humans with this strategy: ${passInstruction}. Use facial features (eyes, mouth, nose, ears), hair/head, upper body, silhouettes, hands/arms, and clothing boundaries. Do not count mannequins/statues/posters.`,
+              text: `Count humans with this strategy: ${passInstruction}.
+
+PIXEL-LEVEL DETECTION APPROACH:
+1. FACIAL FEATURES (primary cues): Scan for skin-tone pixel clusters forming faces. Identify eyes (dark circular pixel regions with sclera contrast), nose (central facial shadow/highlight gradient), mouth (horizontal pixel band with lip color differentiation), ears (curved skin-tone regions at head sides), eyebrows (dark arched pixel lines above eyes).
+2. HAIR & HEAD DETECTION: Detect hair by color and texture patterns — look for consistent pixel regions of black, brown, blonde, red, gray, or white hair tones. Identify head shapes as oval/round pixel clusters above shoulders. Detect hairlines, partings, buns, ponytails, braids as structural cues.
+3. SKIN TEXTURE ANALYSIS: Identify exposed skin regions by texture uniformity and color tone (varying across ethnicities). Look for hands, arms, necks, and legs as secondary human indicators.
+4. BODY & CLOTHING: Detect torso shapes, shoulder lines, clothing edges with distinct color/texture boundaries against background. Use clothing wrinkle patterns and fabric texture as human presence indicators.
+5. SILHOUETTES & PARTIAL VIEWS: For occluded individuals, use partial head tops, single visible shoulders, or arm segments as valid detection cues.
+6. DEPTH & OVERLAP: In crowds, use pixel scale differences to identify individuals at varying distances. Separate overlapping heads by detecting subtle color/texture boundaries between adjacent people.
+
+EXCLUSION RULES: Do not count mannequins, statues, posters, photographs, reflections, or non-living human representations. Verify each detection has at least 2 independent human cues (e.g., head shape + skin tone, hair + clothing edge).`,
             },
             imageContent,
           ],
