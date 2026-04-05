@@ -269,7 +269,7 @@ serve(async (req) => {
       apiKey: LOVABLE_API_KEY,
       imageContent,
       passInstruction:
-        "Balanced pass: count all distinct humans once, including partially visible people when strong human cues are present, while avoiding double-counting in dense scenes",
+        "Thorough enumeration pass: systematically scan the entire image left-to-right, top-to-bottom. Number each person you find (Person 1, Person 2, etc.) and note their position. Count ALL humans including those at edges, partially cropped, partially hidden behind others, in the background, or only showing the top of their head. Even a sliver of a face, a partial head, or just hair visible behind someone counts as a person. ERR ON THE SIDE OF COUNTING MORE rather than fewer — it is better to slightly overcount than to miss someone. After your initial scan, do a SECOND mental pass specifically looking for anyone you might have missed between or behind already-counted people",
     });
 
     const result = normalizeResult({
