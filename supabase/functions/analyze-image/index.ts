@@ -108,30 +108,20 @@ async function callVisionPass({
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "google/gemini-2.5-pro",
+      model: "google/gemini-2.5-flash",
       temperature: 0,
       messages: [
         {
           role: "system",
           content:
-            "You are an expert crowd-counting and human-detection model specializing in pixel-level analysis. You excel at counting humans in difficult scenes including occlusion, blur, low light, profile views, and rear views. You analyze images at the pixel level to detect subtle human presence cues. Return only data for the provided tool call.",
+            "You are an expert crowd-counting model. Count humans in difficult scenes (occlusion, blur, profile view). Return only data for the provided tool call.",
         },
         {
           role: "user",
           content: [
             {
               type: "text",
-              text: `Count humans with this strategy: ${passInstruction}.
-
-PIXEL-LEVEL DETECTION APPROACH:
-1. FACIAL FEATURES (primary cues): Scan for skin-tone pixel clusters forming faces. Identify eyes (dark circular pixel regions with sclera contrast), nose (central facial shadow/highlight gradient), mouth (horizontal pixel band with lip color differentiation), ears (curved skin-tone regions at head sides), eyebrows (dark arched pixel lines above eyes).
-2. HAIR & HEAD DETECTION: Detect hair by color and texture patterns — look for consistent pixel regions of black, brown, blonde, red, gray, or white hair tones. Identify head shapes as oval/round pixel clusters above shoulders. Detect hairlines, partings, buns, ponytails, braids as structural cues.
-3. SKIN TEXTURE ANALYSIS: Identify exposed skin regions by texture uniformity and color tone (varying across ethnicities). Look for hands, arms, necks, and legs as secondary human indicators.
-4. BODY & CLOTHING: Detect torso shapes, shoulder lines, clothing edges with distinct color/texture boundaries against background. Use clothing wrinkle patterns and fabric texture as human presence indicators.
-5. SILHOUETTES & PARTIAL VIEWS: For occluded individuals, use partial head tops, single visible shoulders, or arm segments as valid detection cues.
-6. DEPTH & OVERLAP: In crowds, use pixel scale differences to identify individuals at varying distances. Separate overlapping heads by detecting subtle color/texture boundaries between adjacent people.
-
-EXCLUSION RULES: Do not count mannequins, statues, posters, photographs, reflections, or non-living human representations. Verify each detection has at least 2 independent human cues (e.g., head shape + skin tone, hair + clothing edge).`,
+              text: `Count humans with this strategy: ${passInstruction}. Use facial features (eyes, mouth, nose, ears), hair/head, upper body, silhouettes, hands/arms, and clothing boundaries. Do not count mannequins/statues/posters.`,
             },
             imageContent,
           ],
@@ -264,44 +254,18 @@ serve(async (req) => {
       });
     }
 
-    // Triple-pass strategy for accuracy
-    const [pass1, pass2, pass3] = await Promise.all([
-      callVisionPassWithRetry({
-        apiKey: LOVABLE_API_KEY,
-        imageContent,
-        passInstruction:
-          "GRID-BASED ENUMERATION: Mentally divide the image into a 4x4 grid (16 cells). For EACH cell, list every person or partial person visible. Label them by grid cell (e.g., 'Row1-Col1: Person 1'). Include anyone whose head, hair, shoulder, arm, or any body part appears in that cell. After scanning all 16 cells, deduplicate people spanning multiple cells, then give the TOTAL. Count partial/occluded people. Err on the side of MORE.",
-      }),
-      callVisionPassWithRetry({
-        apiKey: LOVABLE_API_KEY,
-        imageContent,
-        passInstruction:
-          "FEATURE-BASED ENUMERATION: First, count all clearly visible full faces. Second, count all partially visible faces (profile, three-quarter view, back of head, occluded by objects or other people). Third, count any humans visible only by body parts (shoulder, arm, hair top, legs) without any face visible. For each category give the sub-count, then sum ALL categories for the total. Every distinct human presence counts, even if only hair or a shoulder is visible.",
-      }),
-      callVisionPassWithRetry({
-        apiKey: LOVABLE_API_KEY,
-        imageContent,
-        passInstruction:
-          "SYSTEMATIC LEFT-TO-RIGHT SWEEP: Scan the entire image from left edge to right edge, top to bottom, like reading a page. Number each person you find (Person 1, Person 2, etc.) and note their approximate position (e.g., 'far left background', 'center foreground'). Count ALL humans including those at edges, partially cropped, partially hidden behind others or objects, in the background, blurry, or only showing the top of their head. Even a sliver of a face, a partial head, or just hair visible behind someone counts as a person. ERR ON THE SIDE OF COUNTING MORE rather than fewer.",
-      }),
-    ]);
-
-    // Use median of 3 passes for robustness, but if 2+ agree take that value
-    const counts = [pass1.count, pass2.count, pass3.count].sort((a, b) => a - b);
-    const median = counts[1];
-    const maxCount = counts[2];
-    
-    // If the max is only 1 more than median, trust the max (undercounting bias)
-    const finalCount = (maxCount - median <= 1) ? maxCount : median;
-    
-    const allSame = counts[0] === counts[2];
-    const twoAgree = counts[0] === counts[1] || counts[1] === counts[2];
-    const finalConfidence = allSame ? "high" : twoAgree ? "medium" : "low";
+    // Single balanced pass to reduce rate-limit pressure
+    const balancedPass = await callVisionPassWithRetry({
+      apiKey: LOVABLE_API_KEY,
+      imageContent,
+      passInstruction:
+        "Balanced pass: count all distinct humans once, including partially visible people when strong human cues are present, while avoiding double-counting in dense scenes",
+    });
 
     const result = normalizeResult({
-      count: finalCount,
-      confidence: finalConfidence,
-      details: `Triple-pass: Grid=${pass1.count}, Feature=${pass2.count}, Sweep=${pass3.count}. ${pass1.details || ""} ${pass2.details || ""} ${pass3.details || ""}`.trim(),
+      count: balancedPass.count,
+      confidence: balancedPass.confidence,
+      details: `Single-pass result. ${balancedPass.details || ""}`.trim(),
     });
 
     setCachedResult(imageHash, result);
