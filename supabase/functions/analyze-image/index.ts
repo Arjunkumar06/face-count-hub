@@ -262,18 +262,37 @@ serve(async (req) => {
       });
     }
 
-    // Single balanced pass to reduce rate-limit pressure
-    const balancedPass = await callVisionPassWithRetry({
-      apiKey: LOVABLE_API_KEY,
-      imageContent,
-      passInstruction:
-        "Balanced pass: count all distinct humans once, including partially visible people when strong human cues are present, while avoiding double-counting in dense scenes",
-    });
+    // Two parallel passes for accuracy + speed (different strategies, reconciled)
+    const [gridPass, featurePass] = await Promise.all([
+      callVisionPassWithRetry({
+        apiKey: LOVABLE_API_KEY,
+        imageContent,
+        passInstruction:
+          "Grid sweep: divide the image into a 4x4 grid, count humans in each cell, then sum. Be exhaustive in dense areas",
+      }),
+      callVisionPassWithRetry({
+        apiKey: LOVABLE_API_KEY,
+        imageContent,
+        passInstruction:
+          "Feature scan: identify every distinct head, face, hair cluster, or body silhouette. Each unique head = 1 person, including back-facing and partially occluded",
+      }),
+    ]);
+
+    // Reconcile: take the max (counters undercounting bias) but only if within 30% of min
+    const minCount = Math.min(gridPass.count, featurePass.count);
+    const maxCount = Math.max(gridPass.count, featurePass.count);
+    const finalCount = maxCount - minCount <= Math.max(2, minCount * 0.3) ? maxCount : Math.round((minCount + maxCount) / 2);
+    const agree = gridPass.count === featurePass.count;
+    const confidence: "high" | "medium" | "low" = agree
+      ? "high"
+      : maxCount - minCount <= 2
+        ? "medium"
+        : "low";
 
     const result = normalizeResult({
-      count: balancedPass.count,
-      confidence: balancedPass.confidence,
-      details: `Single-pass result. ${balancedPass.details || ""}`.trim(),
+      count: finalCount,
+      confidence,
+      details: `Grid pass: ${gridPass.count}, Feature pass: ${featurePass.count}. ${gridPass.details || featurePass.details || ""}`.trim(),
     });
 
     setCachedResult(imageHash, result);
