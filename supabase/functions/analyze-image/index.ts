@@ -108,28 +108,20 @@ async function callVisionPass({
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "google/gemini-2.5-pro",
+      model: "google/gemini-2.5-flash",
       temperature: 0,
       messages: [
         {
           role: "system",
           content:
-            "You are a world-class crowd-counting expert. Your job is to count every distinct human in the image with maximum precision, including partially visible, occluded, blurry, distant, back-facing, or profile-view people. Use a systematic grid sweep mentally before answering. Never undercount dense crowds and never count mannequins, statues, posters, drawings, reflections, or shadows. Return ONLY the tool call.",
+            "You are an expert crowd-counting model. Count humans in difficult scenes (occlusion, blur, profile view). Return only data for the provided tool call.",
         },
         {
           role: "user",
           content: [
             {
               type: "text",
-              text: `Counting strategy: ${passInstruction}.
-
-Method:
-1. Mentally divide the image into a 4x4 grid and count humans in each cell.
-2. Look for ANY human cue: full faces, partial faces, eyes, noses, mouths, ears, hair, heads, necks, shoulders, torsos, arms, hands, legs, feet, silhouettes, clothing boundaries.
-3. In dense crowds, count heads/hair clusters carefully — each distinct head = 1 person.
-4. Include people at the edges, in the background, behind others, and partially cropped.
-5. Exclude: mannequins, statues, posters/photos within the image, drawings, reflections, shadows.
-6. Sum all cells for the final count. Be exact, not approximate.`,
+              text: `Count humans with this strategy: ${passInstruction}. Use facial features (eyes, mouth, nose, ears), hair/head, upper body, silhouettes, hands/arms, and clothing boundaries. Do not count mannequins/statues/posters.`,
             },
             imageContent,
           ],
@@ -262,37 +254,18 @@ serve(async (req) => {
       });
     }
 
-    // Two parallel passes for accuracy + speed (different strategies, reconciled)
-    const [gridPass, featurePass] = await Promise.all([
-      callVisionPassWithRetry({
-        apiKey: LOVABLE_API_KEY,
-        imageContent,
-        passInstruction:
-          "Grid sweep: divide the image into a 4x4 grid, count humans in each cell, then sum. Be exhaustive in dense areas",
-      }),
-      callVisionPassWithRetry({
-        apiKey: LOVABLE_API_KEY,
-        imageContent,
-        passInstruction:
-          "Feature scan: identify every distinct head, face, hair cluster, or body silhouette. Each unique head = 1 person, including back-facing and partially occluded",
-      }),
-    ]);
-
-    // Reconcile: take the max (counters undercounting bias) but only if within 30% of min
-    const minCount = Math.min(gridPass.count, featurePass.count);
-    const maxCount = Math.max(gridPass.count, featurePass.count);
-    const finalCount = maxCount - minCount <= Math.max(2, minCount * 0.3) ? maxCount : Math.round((minCount + maxCount) / 2);
-    const agree = gridPass.count === featurePass.count;
-    const confidence: "high" | "medium" | "low" = agree
-      ? "high"
-      : maxCount - minCount <= 2
-        ? "medium"
-        : "low";
+    // Single balanced pass to reduce rate-limit pressure
+    const balancedPass = await callVisionPassWithRetry({
+      apiKey: LOVABLE_API_KEY,
+      imageContent,
+      passInstruction:
+        "Balanced pass: count all distinct humans once, including partially visible people when strong human cues are present, while avoiding double-counting in dense scenes",
+    });
 
     const result = normalizeResult({
-      count: finalCount,
-      confidence,
-      details: `Grid pass: ${gridPass.count}, Feature pass: ${featurePass.count}. ${gridPass.details || featurePass.details || ""}`.trim(),
+      count: balancedPass.count,
+      confidence: balancedPass.confidence,
+      details: `Single-pass result. ${balancedPass.details || ""}`.trim(),
     });
 
     setCachedResult(imageHash, result);

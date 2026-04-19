@@ -1,6 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 
-const CLIENT_SCAN_GAP_MS = 2000;
+const CLIENT_SCAN_GAP_MS = 7000;
 let scanQueue: Promise<void> = Promise.resolve();
 let lastScanStartedAt = 0;
 
