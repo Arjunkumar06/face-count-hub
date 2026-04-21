@@ -278,15 +278,23 @@ serve(async (req) => {
 
     if (msg.startsWith("AI_PASS_ERROR:429:")) {
       return new Response(
-        JSON.stringify({ error: "Rate limit exceeded. Please try again in a moment." }),
-        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({
+          error: "RATE_LIMITED",
+          message: "Rate limit exceeded. Please try again in a moment.",
+          retryable: true,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     if (msg.startsWith("AI_PASS_ERROR:402:")) {
       return new Response(
-        JSON.stringify({ error: "AI credits exhausted. Please add credits in Settings." }),
-        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({
+          error: "AI_CREDITS_EXHAUSTED",
+          message: "AI credits exhausted. Please add credits in Settings.",
+          actionRequired: "add_credits",
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 

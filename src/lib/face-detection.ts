@@ -56,14 +56,28 @@ async function invokeAnalyzeImage(base64: string): Promise<DetectionResult> {
     if (status === 429) {
       throw new Error("RATE_LIMITED");
     }
+    if (status === 402) {
+      throw new Error("AI_CREDITS_EXHAUSTED");
+    }
     throw new Error("Detection failed. Please try again.");
   }
 
   if (data?.error) {
-    const errorText = typeof data.error === "string" ? data.error : "Detection failed. Please try again.";
-    if (errorText.toLowerCase().includes("rate limit")) {
+    const errorCode = typeof data.error === "string" ? data.error : "";
+    const errorText = typeof data.message === "string"
+      ? data.message
+      : typeof data.error === "string"
+        ? data.error
+        : "Detection failed. Please try again.";
+
+    if (errorCode === "RATE_LIMITED" || errorText.toLowerCase().includes("rate limit")) {
       throw new Error("RATE_LIMITED");
     }
+
+    if (errorCode === "AI_CREDITS_EXHAUSTED" || errorText.toLowerCase().includes("credits exhausted")) {
+      throw new Error("AI_CREDITS_EXHAUSTED");
+    }
+
     throw new Error(errorText);
   }
 

@@ -76,6 +76,8 @@ export default function ScanCard({ imageUrl, file, onSaved }: ScanCardProps) {
       const message = err instanceof Error ? err.message : "";
       if (message === "RATE_LIMITED") {
         toast.error("Too many scans in a short time. Please wait a few seconds and try again.");
+      } else if (message === "AI_CREDITS_EXHAUSTED") {
+        toast.error("AI credits are exhausted. Add credits in Settings, then try again.");
       } else {
         toast.error("Detection failed. Please try again.");
       }
